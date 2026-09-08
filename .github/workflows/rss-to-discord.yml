@@ -30,6 +30,7 @@ jobs:
             "rss_url": os.environ["RSS_URL"],
             "webhook_url": os.environ["DISCORD_WEBHOOK_URL"],
             "discord_username": "@kbourcrypto",
+            "avatar_url": "https://pbs.twimg.com/profile_images/1877015930200260608/ymN_glL7_400x400.png",
             "interval_seconds": 600,
             "max_per_run": 5,
             "send_on_first_run": False,

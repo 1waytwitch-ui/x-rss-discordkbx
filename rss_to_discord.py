@@ -105,7 +105,7 @@ def rewrite_x_link(url: str) -> str:
     return url
 
 
-def post_discord(webhook: str, item: dict[str, str], username: str) -> None:
+def post_discord(webhook: str, item: dict[str, str], username: str, avatar_url: str = "") -> None:
     link = rewrite_x_link(item["link"])
     content_parts = []
     if link:
@@ -115,6 +115,8 @@ def post_discord(webhook: str, item: dict[str, str], username: str) -> None:
     elif item.get("description"):
         content_parts.append(item["description"][:1900])
     payload = {"username": username[:80] or "RSS", "content": "\n".join(content_parts)[:2000]}
+    if avatar_url:
+        payload["avatar_url"] = avatar_url
     data = json.dumps(payload).encode("utf-8")
     req = Request(webhook, data=data, headers={"Content-Type": "application/json", "User-Agent": "rss-to-discord/1.0"}, method="POST")
     with urlopen(req, timeout=20) as resp:
@@ -125,6 +127,7 @@ def run_once(cfg: dict[str, Any]) -> int:
     rss_url = cfg["rss_url"].strip()
     webhook = cfg["webhook_url"].strip()
     username = cfg.get("discord_username") or "X RSS"
+    avatar_url = (cfg.get("avatar_url") or "").strip()
     max_per_run = int(cfg.get("max_per_run") or 5)
     send_on_first_run = bool(cfg.get("send_on_first_run", False))
     force_test = os.environ.get("FORCE_TEST", "").lower() in {"1", "true", "yes"}
@@ -141,7 +144,7 @@ def run_once(cfg: dict[str, Any]) -> int:
 
     if force_test:
         latest = items[0]
-        post_discord(webhook, latest, username)
+        post_discord(webhook, latest, username, avatar_url)
         print(f"TEST OK  {latest.get('link') or latest.get('title')}")
         k = item_key(latest)
         known.add(k)
@@ -169,7 +172,7 @@ def run_once(cfg: dict[str, Any]) -> int:
     sent = 0
     for k, item in new_items[-max_per_run:]:
         try:
-            post_discord(webhook, item, username)
+            post_discord(webhook, item, username, avatar_url)
             known.add(k)
             sent += 1
             print(f"OK  {item.get('link') or item.get('title')}")
