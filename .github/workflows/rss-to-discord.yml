@@ -2,7 +2,8 @@ name: RSS to Discord
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # GitHub ignore souvent */10. Minutes explicites = plus fiable.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch: {}
 
 jobs:
