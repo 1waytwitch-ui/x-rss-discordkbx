@@ -2,7 +2,6 @@ name: RSS to Discord
 
 on:
   schedule:
-    # GitHub ignore souvent */10. Minutes explicites = plus fiable.
     - cron: "7,22,37,52 * * * *"
   workflow_dispatch: {}
 
@@ -13,6 +12,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -42,9 +43,15 @@ jobs:
 
       - name: Sauver seen.json
         if: always()
+        continue-on-error: true
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add seen.json
-          git diff --cached --quiet || git commit -m "update seen.json"
+          if git diff --cached --quiet; then
+            echo "Pas de changement seen.json"
+            exit 0
+          fi
+          git commit -m "update seen.json"
+          git pull --rebase origin main || git pull --rebase --autostash origin main
           git push
