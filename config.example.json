@@ -1,0 +1,8 @@
+{
+  "rss_url": "https://rss.app/feeds/cxz7oMO1M5e1leXS.xml",
+  "webhook_url": "https://discord.com/api/webhooks/ID/TOKEN",
+  "discord_username": "@kbourcrypto",
+  "interval_seconds": 180,
+  "max_per_run": 5,
+  "send_on_first_run": false
+}

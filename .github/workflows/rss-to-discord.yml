@@ -1,0 +1,47 @@
+name: RSS to Discord
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Relais RSS
+        env:
+          RSS_URL: ${{ secrets.RSS_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python3 << 'PY'
+          import json, os
+          from pathlib import Path
+          cfg = {
+            "rss_url": os.environ["RSS_URL"],
+            "webhook_url": os.environ["DISCORD_WEBHOOK_URL"],
+            "discord_username": "@kbourcrypto",
+            "interval_seconds": 600,
+            "max_per_run": 5,
+            "send_on_first_run": False,
+          }
+          Path("config.json").write_text(json.dumps(cfg), encoding="utf-8")
+          PY
+          python3 rss_to_discord.py --once
+
+      - name: Sauver seen.json
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || git commit -m "update seen.json"
+          git push
