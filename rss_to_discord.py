@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""
-Relais RSS -> webhook Discord.
-Usage:
-  1. Copie config.example.json vers config.json
-  2. Remplis rss_url et webhook_url
-  3. python3 rss_to_discord.py
-
-Idempotent: les items déjà envoyés sont mémorisés dans seen.json.
-"""
+"""Relais RSS -> webhook Discord."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -78,23 +71,13 @@ def strip_html(html: str) -> str:
 def parse_feed(raw: bytes) -> list[dict[str, str]]:
     root = ET.fromstring(raw)
     items: list[dict[str, str]] = []
-
     for item in root.findall("./channel/item"):
         title = text(item.find("title"))
         link = text(item.find("link"))
         guid = text(item.find("guid")) or link or title
         desc = text(item.find("description")) or text(item.find("content:encoded", NS))
         pub = text(item.find("pubDate")) or text(item.find("dc:date", NS))
-        items.append(
-            {
-                "id": guid,
-                "title": title,
-                "link": link,
-                "description": strip_html(desc),
-                "published": pub,
-            }
-        )
-
+        items.append({"id": guid, "title": title, "link": link, "description": strip_html(desc), "published": pub})
     if not items:
         for entry in root.findall("atom:entry", NS) or root.findall("{http://www.w3.org/2005/Atom}entry"):
             title = text(entry.find("atom:title", NS)) or text(entry.find("{http://www.w3.org/2005/Atom}title"))
@@ -105,16 +88,7 @@ def parse_feed(raw: bytes) -> list[dict[str, str]]:
             guid = text(entry.find("atom:id", NS)) or text(entry.find("{http://www.w3.org/2005/Atom}id")) or link
             desc = text(entry.find("atom:summary", NS)) or text(entry.find("atom:content", NS))
             pub = text(entry.find("atom:published", NS)) or text(entry.find("atom:updated", NS))
-            items.append(
-                {
-                    "id": guid,
-                    "title": title,
-                    "link": link,
-                    "description": strip_html(desc),
-                    "published": pub,
-                }
-            )
-
+            items.append({"id": guid, "title": title, "link": link, "description": strip_html(desc), "published": pub})
     return items
 
 
@@ -133,28 +107,16 @@ def rewrite_x_link(url: str) -> str:
 
 def post_discord(webhook: str, item: dict[str, str], username: str) -> None:
     link = rewrite_x_link(item["link"])
-    title = item["title"]
-    desc = item["description"]
     content_parts = []
     if link:
         content_parts.append(link)
-    elif title:
-        content_parts.append(title)
-    elif desc:
-        content_parts.append(desc[:1900])
-
-    payload = {
-        "username": username[:80] or "RSS",
-        "content": "\n".join(content_parts)[:2000],
-    }
-
+    elif item.get("title"):
+        content_parts.append(item["title"])
+    elif item.get("description"):
+        content_parts.append(item["description"][:1900])
+    payload = {"username": username[:80] or "RSS", "content": "\n".join(content_parts)[:2000]}
     data = json.dumps(payload).encode("utf-8")
-    req = Request(
-        webhook,
-        data=data,
-        headers={"Content-Type": "application/json", "User-Agent": "rss-to-discord/1.0"},
-        method="POST",
-    )
+    req = Request(webhook, data=data, headers={"Content-Type": "application/json", "User-Agent": "rss-to-discord/1.0"}, method="POST")
     with urlopen(req, timeout=20) as resp:
         resp.read()
 
@@ -165,6 +127,7 @@ def run_once(cfg: dict[str, Any]) -> int:
     username = cfg.get("discord_username") or "X RSS"
     max_per_run = int(cfg.get("max_per_run") or 5)
     send_on_first_run = bool(cfg.get("send_on_first_run", False))
+    force_test = os.environ.get("FORCE_TEST", "").lower() in {"1", "true", "yes"}
 
     seen: dict[str, Any] = load_json(SEEN_PATH, {"keys": []})
     known = set(seen.get("keys") or [])
@@ -172,10 +135,24 @@ def run_once(cfg: dict[str, Any]) -> int:
 
     raw = fetch(rss_url)
     items = parse_feed(raw)
-    items = list(reversed(items))
+    if not items:
+        print("Aucun item dans le flux.")
+        return 0
 
+    if force_test:
+        latest = items[0]
+        post_discord(webhook, latest, username)
+        print(f"TEST OK  {latest.get('link') or latest.get('title')}")
+        k = item_key(latest)
+        known.add(k)
+        seen["keys"] = list(known)[-2000:]
+        seen["last_run"] = datetime.now(timezone.utc).isoformat()
+        save_json(SEEN_PATH, seen)
+        return 1
+
+    items_chrono = list(reversed(items))
     new_items = []
-    for item in items:
+    for item in items_chrono:
         k = item_key(item)
         if k not in known:
             new_items.append((k, item))
@@ -224,7 +201,7 @@ def loop(cfg: dict[str, Any]) -> None:
 
 def main() -> None:
     if not CONFIG_PATH.exists():
-        print("Crée config.json à partir de config.example.json (rss_url + webhook_url).", file=sys.stderr)
+        print("config.json manquant.", file=sys.stderr)
         sys.exit(1)
     cfg = load_json(CONFIG_PATH, {})
     if not cfg.get("rss_url") or not cfg.get("webhook_url"):

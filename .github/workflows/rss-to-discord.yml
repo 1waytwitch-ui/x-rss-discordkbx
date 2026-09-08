@@ -21,6 +21,7 @@ jobs:
         env:
           RSS_URL: ${{ secrets.RSS_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          FORCE_TEST: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
           python3 << 'PY'
           import json, os
