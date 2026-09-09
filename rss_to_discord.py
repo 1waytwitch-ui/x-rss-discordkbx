@@ -10,7 +10,7 @@ import re
 import sys
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,7 @@ from urllib.error import URLError, HTTPError
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 SEEN_PATH = Path(__file__).with_name("seen.json")
-MAX_AGE = timedelta(hours=36)
+MAX_AGE_HOURS = int(os.environ.get("MAX_AGE_HOURS", "48"))
 
 NS = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -80,17 +80,6 @@ def parse_feed(raw: bytes) -> list[dict[str, str]]:
         desc = text(item.find("description")) or text(item.find("content:encoded", NS))
         pub = text(item.find("pubDate")) or text(item.find("dc:date", NS))
         items.append({"id": guid, "title": title, "link": link, "description": strip_html(desc), "published": pub})
-    if not items:
-        for entry in root.findall("atom:entry", NS) or root.findall("{http://www.w3.org/2005/Atom}entry"):
-            title = text(entry.find("atom:title", NS)) or text(entry.find("{http://www.w3.org/2005/Atom}title"))
-            link_el = entry.find("atom:link[@rel='alternate']", NS)
-            if link_el is None:
-                link_el = entry.find("atom:link", NS) or entry.find("{http://www.w3.org/2005/Atom}link")
-            link = (link_el.get("href") if link_el is not None else "") or ""
-            guid = text(entry.find("atom:id", NS)) or text(entry.find("{http://www.w3.org/2005/Atom}id")) or link
-            desc = text(entry.find("atom:summary", NS)) or text(entry.find("atom:content", NS))
-            pub = text(entry.find("atom:published", NS)) or text(entry.find("atom:updated", NS))
-            items.append({"id": guid, "title": title, "link": link, "description": strip_html(desc), "published": pub})
     return items
 
 
@@ -99,27 +88,22 @@ def item_key(item: dict[str, str]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def parse_pub(item: dict[str, str]) -> datetime | None:
+def is_pinned(item: dict[str, str]) -> bool:
+    title = (item.get("title") or "").lstrip()
+    return title.lower().startswith("pinned:") or title.lower().startswith("épingl")
+
+
+def is_too_old(item: dict[str, str], hours: int = MAX_AGE_HOURS) -> bool:
     raw = item.get("published") or ""
     if not raw:
-        return None
+        return False
     try:
         dt = parsedate_to_datetime(raw)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+        return datetime.now(timezone.utc) - dt > timedelta(hours=hours)
     except Exception:
-        return None
-
-
-def should_skip(item: dict[str, str]) -> str | None:
-    title = (item.get("title") or "").lstrip()
-    if title.lower().startswith("pinned:"):
-        return "pinned"
-    pub = parse_pub(item)
-    if pub and datetime.now(timezone.utc) - pub > MAX_AGE:
-        return f"too_old:{pub.date().isoformat()}"
-    return None
+        return False
 
 
 def rewrite_x_link(url: str) -> str:
@@ -137,8 +121,6 @@ def post_discord(webhook: str, item: dict[str, str], username: str, avatar_url: 
         content_parts.append(link)
     elif item.get("title"):
         content_parts.append(item["title"])
-    elif item.get("description"):
-        content_parts.append(item["description"][:1900])
     payload = {"username": username[:80] or "RSS", "content": "\n".join(content_parts)[:2000]}
     if avatar_url:
         payload["avatar_url"] = avatar_url
@@ -167,46 +149,39 @@ def run_once(cfg: dict[str, Any]) -> int:
         print("Aucun item dans le flux.")
         return 0
 
-    fresh = []
+    # Toujours mémoriser pinned / vieux pour ne pas les renvoyer plus tard
     for item in items:
-        reason = should_skip(item)
-        k = item_key(item)
-        if reason:
-            print(f"SKIP {reason}  {item.get('link') or item.get('title')}")
-            known.add(k)
-            continue
-        fresh.append(item)
+        if is_pinned(item) or is_too_old(item):
+            known.add(item_key(item))
 
     if force_test:
-        if not fresh:
-            print("TEST: rien de récent à envoyer.")
-            seen["keys"] = sorted(known)[-2000:]
-            seen["last_run"] = datetime.now(timezone.utc).isoformat()
-            save_json(SEEN_PATH, seen)
+        latest = next((it for it in items if not is_pinned(it) and not is_too_old(it)), None)
+        if latest is None:
+            print("TEST: rien de récent à envoyer (pinned/vieux ignorés).")
+            save_json(SEEN_PATH, {"keys": list(known)[-2000:], "last_run": datetime.now(timezone.utc).isoformat()})
             return 0
-        latest = fresh[0]
         post_discord(webhook, latest, username, avatar_url)
         print(f"TEST OK  {latest.get('link') or latest.get('title')}")
         known.add(item_key(latest))
-        seen["keys"] = sorted(known)[-2000:]
-        seen["last_run"] = datetime.now(timezone.utc).isoformat()
-        save_json(SEEN_PATH, seen)
+        save_json(SEEN_PATH, {"keys": list(known)[-2000:], "last_run": datetime.now(timezone.utc).isoformat()})
         return 1
 
-    items_chrono = list(reversed(fresh))
+    items_chrono = list(reversed(items))
     new_items = []
     for item in items_chrono:
+        if is_pinned(item) or is_too_old(item):
+            print(f"SKIP {'pinned' if is_pinned(item) else 'old'}  {item.get('link')}")
+            continue
         k = item_key(item)
         if k not in known:
             new_items.append((k, item))
 
     if first_run and not send_on_first_run:
-        for item in items:
-            known.add(item_key(item))
-        seen["keys"] = sorted(known)[-2000:]
-        seen["initialized_at"] = datetime.now(timezone.utc).isoformat()
-        save_json(SEEN_PATH, seen)
-        print(f"Premier lancement : {len(items)} items mémorisés, rien envoyé.")
+        for k, _ in new_items:
+            known.add(k)
+        seen_out = {"keys": list(known)[-2000:], "initialized_at": datetime.now(timezone.utc).isoformat()}
+        save_json(SEEN_PATH, seen_out)
+        print(f"Premier lancement : {len(new_items)} items mémorisés, rien envoyé.")
         return 0
 
     sent = 0
@@ -221,9 +196,7 @@ def run_once(cfg: dict[str, Any]) -> int:
             print(f"ERR {item.get('link')}: {e}", file=sys.stderr)
             break
 
-    seen["keys"] = sorted(known)[-2000:]
-    seen["last_run"] = datetime.now(timezone.utc).isoformat()
-    save_json(SEEN_PATH, seen)
+    save_json(SEEN_PATH, {"keys": list(known)[-2000:], "last_run": datetime.now(timezone.utc).isoformat()})
     print(f"Envoyé : {sent} / nouveaux : {len(new_items)}")
     return sent
 
