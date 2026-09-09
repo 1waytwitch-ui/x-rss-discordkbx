@@ -1,8 +1,6 @@
 name: RSS to Discord
 
 on:
-  schedule:
-    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -31,7 +29,7 @@ jobs:
         env:
           RSS_URL: ${{ secrets.RSS_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          FORCE_TEST: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'cron' && '1' || '0' }}
+          FORCE_TEST: ${{ github.event.inputs.mode != 'cron' && '1' || '0' }}
         run: |
           echo "event=${{ github.event_name }} mode=${{ github.event.inputs.mode }} FORCE_TEST=$FORCE_TEST"
           python3 << 'PY'
@@ -49,7 +47,6 @@ jobs:
           Path("config.json").write_text(json.dumps(cfg), encoding="utf-8")
           PY
           python3 rss_to_discord.py --once
-
       - name: Sauver seen.json
         if: always()
         continue-on-error: true
